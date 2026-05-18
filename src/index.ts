@@ -27,6 +27,7 @@ import type { AppEnv, MoltbotEnv } from './types';
 import { MOLTBOT_PORT } from './config';
 import { createAccessMiddleware } from './auth';
 import { ensureMoltbotGateway, findExistingMoltbotProcess, syncToR2 } from './gateway';
+import { runVeilleMail, isVeilleWindow } from './veille';
 import { publicRoutes, api, adminUi, debug, cdp } from './routes';
 import { redactSensitiveParams } from './utils/logging';
 import loadingPageHtml from './assets/loading.html';
@@ -446,13 +447,38 @@ app.all('*', async (c) => {
 
 /**
  * Scheduled handler for cron triggers.
- * Syncs moltbot config/state from container to R2 for persistence.
+ *
+ * Crons configured in wrangler.jsonc:
+ *  - every 5 min        — R2 backup sync
+ *  - "15 6 * * 1-5"     — Veille mail CEST guard (8:15 Paris in summer, UTC+2)
+ *  - "15 7 * * 1-5"     — Veille mail CET  guard (8:15 Paris in winter, UTC+1)
+ *
+ * Both veille crons fire daily; isVeilleWindow() lets only the one that lands
+ * in the 8:00–8:30 Paris window actually run, preventing double execution.
  */
 async function scheduled(
-  _event: ScheduledEvent,
+  event: ScheduledEvent,
   env: MoltbotEnv,
   _ctx: ExecutionContext,
 ): Promise<void> {
+  // Veille mail — runs Mon–Fri at 8:15 Paris time
+  if (event.cron === '15 6 * * 1-5' || event.cron === '15 7 * * 1-5') {
+    if (!isVeilleWindow()) {
+      console.log('[cron] Veille cron fired outside Paris 8:00–8:30 window, skipping');
+      return;
+    }
+    console.log('[cron] Starting veille mail run...');
+    const result = await runVeilleMail(env);
+    console.log(
+      `[cron] Veille mail done — ${result.total_emails} emails, ${result.bulletins.length} bulletins, ${result.errors.length} errors`,
+    );
+    if (result.errors.length > 0) {
+      console.error('[cron] Veille errors:', result.errors.join(' | '));
+    }
+    return;
+  }
+
+  // R2 backup sync (every 5 min)
   const options = buildSandboxOptions(env);
   const sandbox = getSandbox(env.Sandbox, 'moltbot', options);
 

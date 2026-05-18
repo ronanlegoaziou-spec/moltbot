@@ -62,9 +62,13 @@
       "bucket_name": "moltbot-data","preview_bucket_name": "moltbot-data",
     },
   ],
-  // Cron trigger to sync moltbot data to R2 every 5 minutes
+  // Cron triggers:
+  //   - */5 * * * *      : R2 backup sync (every 5 min)
+  //   - 15 6 * * 1-5     : Veille mail — 8:15 Paris CEST (UTC+2, summer)
+  //   - 15 7 * * 1-5     : Veille mail — 8:15 Paris CET  (UTC+1, winter)
+  // Both veille crons fire daily; the handler checks Paris local time to run only once.
   "triggers": {
-    "crons": ["*/5 * * * *"],
+    "crons": ["*/5 * * * *", "15 6 * * 1-5", "15 7 * * 1-5"],
   },
   // Browser Rendering binding for CDP shim
   "browser": {

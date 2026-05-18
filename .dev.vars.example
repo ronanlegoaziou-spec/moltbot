@@ -40,3 +40,9 @@ MOLTBOT_GATEWAY_TOKEN=dev-token-change-in-prod
 # CDP (Chrome DevTools Protocol) configuration for browser automation
 # CDP_SECRET=shared-secret-for-cdp-auth
 # WORKER_URL=https://your-worker.example.com
+
+# Veille mail automatisée (cron lun-ven 8h15 Paris)
+# VEILLE_WEBAPP_URL=https://script.google.com/macros/s/XXXX/exec
+# VEILLE_WEBAPP_KEY=your-webapp-secret-key
+# VEILLE_SLACK_BOT_TOKEN=xoxb-voxa-bot-token   (falls back to SLACK_BOT_TOKEN if not set)
+# VEILLE_ADMIN_SLACK_USER=U0AFT8CK7BR           (Slack user to DM on infra error)

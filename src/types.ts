@@ -42,6 +42,11 @@ export interface MoltbotEnv {
   BROWSER?: Fetcher;
   CDP_SECRET?: string; // Shared secret for CDP endpoint authentication
   WORKER_URL?: string; // Public URL of the worker (for CDP endpoint)
+  // Veille mail automatisée (cron lun-ven 8h15 Paris)
+  VEILLE_WEBAPP_URL?: string; // Google Apps Script Web App URL (export Gmail 24h)
+  VEILLE_WEBAPP_KEY?: string; // Auth key for the Web App
+  VEILLE_SLACK_BOT_TOKEN?: string; // Slack Bot token for posting bulletins (falls back to SLACK_BOT_TOKEN)
+  VEILLE_ADMIN_SLACK_USER?: string; // Slack user ID to DM on infra errors (default: U0AFT8CK7BR)
 }
 
 /**
