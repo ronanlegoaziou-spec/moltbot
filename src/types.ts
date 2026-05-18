@@ -47,6 +47,10 @@ export interface MoltbotEnv {
   VEILLE_WEBAPP_KEY?: string; // Auth key for the Web App
   VEILLE_SLACK_BOT_TOKEN?: string; // Slack Bot token for posting bulletins (falls back to SLACK_BOT_TOKEN)
   VEILLE_ADMIN_SLACK_USER?: string; // Slack user ID to DM on infra errors (default: U0AFT8CK7BR)
+  // Gmail API fallback (optional — used when Google Apps Script is unavailable)
+  GMAIL_REFRESH_TOKEN?: string; // OAuth refresh token for Gmail API v1
+  GMAIL_CLIENT_ID?: string; // Google OAuth client ID
+  GMAIL_CLIENT_SECRET?: string; // Google OAuth client secret
 }
 
 /**

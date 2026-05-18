@@ -46,3 +46,7 @@ MOLTBOT_GATEWAY_TOKEN=dev-token-change-in-prod
 # VEILLE_WEBAPP_KEY=your-webapp-secret-key
 # VEILLE_SLACK_BOT_TOKEN=xoxb-voxa-bot-token   (falls back to SLACK_BOT_TOKEN if not set)
 # VEILLE_ADMIN_SLACK_USER=U0AFT8CK7BR           (Slack user to DM on infra error)
+# Gmail API fallback (optionnel — si le Google Apps Script est indisponible)
+# GMAIL_CLIENT_ID=xxx.apps.googleusercontent.com
+# GMAIL_CLIENT_SECRET=GOCSPX-xxx
+# GMAIL_REFRESH_TOKEN=1//xxx   (obtenu via OAuth flow une seule fois)

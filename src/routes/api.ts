@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../types';
 import { createAccessMiddleware } from '../auth';
+import { runVeilleMail } from '../veille';
 import {
   ensureMoltbotGateway,
   findExistingMoltbotProcess,
@@ -309,5 +310,17 @@ adminApi.post('/gateway/restart', async (c) => {
 
 // Mount admin API routes under /admin
 api.route('/admin', adminApi);
+
+// POST /api/veille/run — manual trigger (protected by Cloudflare Access)
+api.post('/veille/run', createAccessMiddleware({ type: 'json' }), async (c) => {
+  console.log('[api] Manual veille run triggered');
+  try {
+    const result = await runVeilleMail(c.env);
+    return c.json(result);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return c.json({ error: message }, 500);
+  }
+});
 
 export { api };

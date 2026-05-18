@@ -1,5 +1,6 @@
 import { CLIENTS } from './clients';
 import { fetchGmailExport, parseEmails, tagEmailsByClient } from './gmail';
+import { fetchGmailApiEmails, isGmailApiConfigured } from './gmail-api';
 import { analyzeClientEmails } from './analyze';
 import { sendBulletinToSlack, sendDmToUser } from './slack';
 import type { VeilleRunResult } from './types';
@@ -13,6 +14,10 @@ export interface VeilleEnv {
   VEILLE_WEBAPP_URL?: string;
   VEILLE_WEBAPP_KEY?: string;
   VEILLE_ADMIN_SLACK_USER?: string;
+  // Gmail API fallback (optional — used when Google Apps Script is unavailable)
+  GMAIL_REFRESH_TOKEN?: string;
+  GMAIL_CLIENT_ID?: string;
+  GMAIL_CLIENT_SECRET?: string;
 }
 
 // Ronan's Slack user ID — receives DM on infra errors (never on client channels)
@@ -54,9 +59,11 @@ export async function runVeilleMail(env: VeilleEnv): Promise<VeilleRunResult> {
   const botToken = env.VEILLE_SLACK_BOT_TOKEN ?? env.SLACK_BOT_TOKEN;
   const adminUser = env.VEILLE_ADMIN_SLACK_USER ?? DEFAULT_ADMIN_USER;
 
+  const hasAppsScript = !!(env.VEILLE_WEBAPP_URL && env.VEILLE_WEBAPP_KEY);
+  const hasGmailApi = isGmailApiConfigured(env);
+
   const missingVars: string[] = [];
-  if (!env.VEILLE_WEBAPP_URL) missingVars.push('VEILLE_WEBAPP_URL');
-  if (!env.VEILLE_WEBAPP_KEY) missingVars.push('VEILLE_WEBAPP_KEY');
+  if (!hasAppsScript && !hasGmailApi) missingVars.push('VEILLE_WEBAPP_URL+VEILLE_WEBAPP_KEY or GMAIL_*');
   if (!env.ANTHROPIC_API_KEY) missingVars.push('ANTHROPIC_API_KEY');
   if (!botToken) missingVars.push('VEILLE_SLACK_BOT_TOKEN or SLACK_BOT_TOKEN');
 
@@ -67,23 +74,38 @@ export async function runVeilleMail(env: VeilleEnv): Promise<VeilleRunResult> {
     return result;
   }
 
-  // Step 1 — Fetch Gmail export via Google Apps Script Web App
-  let rawGmail: string;
+  // Step 1 — Fetch emails: try Google Apps Script first, fall back to Gmail API
+  let emails: Awaited<ReturnType<typeof parseEmails>>;
   try {
-    console.log('[veille] Fetching Gmail export...');
-    rawGmail = await fetchGmailExport(env.VEILLE_WEBAPP_URL!, env.VEILLE_WEBAPP_KEY!);
-    console.log(`[veille] Gmail export: ${rawGmail.length} chars`);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    result.errors.push(`Gmail fetch: ${msg}`);
-    console.error('[veille] Gmail fetch error:', msg);
-    // DM admin — never post errors in client channels
-    await sendDmToUser(adminUser, `⚠️ Veille mail — Échec récupération Gmail : ${msg}`, botToken!);
-    return result;
+    if (hasAppsScript) {
+      console.log('[veille] Fetching Gmail via Apps Script...');
+      const raw = await fetchGmailExport(env.VEILLE_WEBAPP_URL!, env.VEILLE_WEBAPP_KEY!);
+      console.log(`[veille] Apps Script export: ${raw.length} chars`);
+      emails = parseEmails(raw);
+    } else {
+      throw new Error('Apps Script not configured');
+    }
+  } catch (appsScriptErr) {
+    if (hasGmailApi) {
+      console.log('[veille] Apps Script failed, trying Gmail API fallback...');
+      try {
+        emails = await fetchGmailApiEmails(env);
+        console.log(`[veille] Gmail API fallback: ${emails.length} emails`);
+      } catch (apiErr) {
+        const msg = `Gmail API: ${apiErr instanceof Error ? apiErr.message : String(apiErr)}`;
+        result.errors.push(msg);
+        console.error('[veille]', msg);
+        await sendDmToUser(adminUser, `⚠️ Veille mail — Échec Gmail (Apps Script + API) : ${msg}`, botToken!);
+        return result;
+      }
+    } else {
+      const msg = appsScriptErr instanceof Error ? appsScriptErr.message : String(appsScriptErr);
+      result.errors.push(`Gmail fetch: ${msg}`);
+      console.error('[veille] Gmail fetch error:', msg);
+      await sendDmToUser(adminUser, `⚠️ Veille mail — Échec récupération Gmail : ${msg}`, botToken!);
+      return result;
+    }
   }
-
-  // Step 2 — Parse + tag emails by client
-  const emails = parseEmails(rawGmail);
   result.total_emails = emails.length;
   console.log(`[veille] ${emails.length} emails parsed`);
 
