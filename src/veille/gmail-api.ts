@@ -74,7 +74,7 @@ function parseGmailMessage(msg: GmailMessage, num: number): ParsedEmail {
     ? new Date(parseInt(msg.internalDate, 10)).toISOString()
     : '';
 
-  const body = msg.payload ? extractPlainText(msg.payload).trim().slice(0, 3000) : '';
+  const body = msg.payload ? extractPlainText(msg.payload).trim().slice(0, 6000) : '';
 
   return { num, date, sender: h('From'), subject: h('Subject'), body };
 }

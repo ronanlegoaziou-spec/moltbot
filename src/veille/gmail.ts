@@ -50,7 +50,7 @@ export function parseEmails(rawText: string): ParsedEmail[] {
       }
     }
 
-    const body = lines.slice(bodyStart).join('\n').slice(0, 3000);
+    const body = lines.slice(bodyStart).join('\n').slice(0, 6000);
 
     emails.push({
       num,
