@@ -41,6 +41,10 @@ export const CLIENTS: ClientConfig[] = [
       'commission des finances',
       'rapporteur général',
       'planification écologique',
+      'bœuf',
+      'viande bovine',
+      'Mercosur',
+      'volaille',
     ],
     slack_channel_id: 'C0AGMK2EFKK', // #bertrand-franchise
     notion_hub_id: '33c5afd3-7b97-810e-ab45-e7113723892a',
