@@ -80,9 +80,15 @@ async function main() {
     console.log(`[veille] ${client.client_id}: ${count} email(s) tagged`);
   }
 
-  const analyses = await Promise.allSettled(
-    CLIENTS.map((client) => analyzeClientEmails(client, taggedEmails, apiKey!)),
-  );
+  // Stagger Claude API calls to stay under 30k tokens/min rate limit
+  const analyses: PromiseSettledResult<Awaited<ReturnType<typeof analyzeClientEmails>>>[] = [];
+  for (const client of CLIENTS) {
+    analyses.push(await Promise.resolve(analyzeClientEmails(client, taggedEmails, apiKey!)).then(
+      (v) => ({ status: 'fulfilled' as const, value: v }),
+      (r) => ({ status: 'rejected' as const, reason: r }),
+    ));
+    await new Promise((res) => setTimeout(res, 3000));
+  }
 
   const errors: string[] = [];
 
