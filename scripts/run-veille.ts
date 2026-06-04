@@ -65,8 +65,11 @@ async function main() {
     emails = await fetchImapEmails(gmailUser!, gmailPass!);
     console.log(`[veille] ${emails.length} emails fetched`);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = err instanceof Error
+      ? `${err.message}${err.cause ? ` | cause: ${err.cause}` : ''}${(err as NodeJS.ErrnoException).code ? ` | code: ${(err as NodeJS.ErrnoException).code}` : ''}`
+      : String(err);
     console.error('[veille] IMAP fetch failed:', msg);
+    console.error('[veille] Full error:', JSON.stringify(err, Object.getOwnPropertyNames(err as object)));
     await sendDmToUser(ADMIN_USER, `⚠️ Veille mail — Échec IMAP : ${msg}`, botToken!);
     process.exit(1);
   }
