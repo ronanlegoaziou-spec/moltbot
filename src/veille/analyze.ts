@@ -106,11 +106,14 @@ Niveaux : critique = vote/décision imminente impact direct, fort = signal majeu
   };
   const text = data.content.find((c) => c.type === 'text')?.text ?? '{}';
 
+  // Strip markdown code fences Claude sometimes adds around JSON
+  const cleanText = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
+
   let parsed: Partial<ClaudeAnalysis> = {};
   try {
-    parsed = JSON.parse(text) as ClaudeAnalysis;
+    parsed = JSON.parse(cleanText) as ClaudeAnalysis;
   } catch {
-    console.error(`[veille] JSON parse error for ${client.client_id}:`, text.slice(0, 300));
+    console.error(`[veille] JSON parse error for ${client.client_id}:`, cleanText.slice(0, 300));
     parsed = {
       synthese: `Erreur de parsing de la réponse Claude pour ${client.nom_court}.`,
       signaux: [],
