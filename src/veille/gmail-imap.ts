@@ -21,7 +21,15 @@ export async function fetchImapEmails(user: string, appPassword: string): Promis
   const emails: ParsedEmail[] = [];
 
   try {
-    const lock = await client.getMailboxLock('[Gmail]/All Mail');
+    // Find the All Mail folder — name varies by Gmail language (EN: "All Mail", FR: "Tous les messages")
+    const mailboxes = await client.list();
+    const allMailBox = mailboxes.find(
+      (mb) => mb.specialUse === '\\All' || /all.?mail|tous.?les.?messages/i.test(mb.path),
+    );
+    const folderPath = allMailBox?.path ?? 'INBOX';
+    console.error(`[veille] Using mailbox: ${folderPath}`);
+
+    const lock = await client.getMailboxLock(folderPath);
     try {
       const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
       const uids = await client.search({ since }, { uid: true });
