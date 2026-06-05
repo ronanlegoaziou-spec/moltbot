@@ -20,28 +20,7 @@ import { sendBulletinToSlack, sendDmToUser } from '../src/veille/slack';
 
 const ADMIN_USER = process.env.VEILLE_ADMIN_SLACK_USER ?? 'U0AFT8CK7BR';
 
-function isVeilleWindow(): boolean {
-  const now = new Date();
-  const parts = new Intl.DateTimeFormat('fr-FR', {
-    timeZone: 'Europe/Paris',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).formatToParts(now);
-
-  const h = parseInt(parts.find((p) => p.type === 'hour')?.value ?? '0', 10);
-  const m = parseInt(parts.find((p) => p.type === 'minute')?.value ?? '0', 10);
-  const total = h * 60 + m;
-  return total >= 8 * 60 && total <= 8 * 60 + 30;
-}
-
 async function main() {
-  // Guard — only run in the 8:00–8:30 Paris window
-  if (!isVeilleWindow()) {
-    console.log('[veille] Outside 8:00–8:30 Paris window — skipping.');
-    process.exit(0);
-  }
-
   const apiKey = process.env.ANTHROPIC_API_KEY;
   const botToken = process.env.VEILLE_SLACK_BOT_TOKEN;
   const gmailUser = process.env.GMAIL_USER;
@@ -87,7 +66,7 @@ async function main() {
       (v) => ({ status: 'fulfilled' as const, value: v }),
       (r) => ({ status: 'rejected' as const, reason: r }),
     ));
-    await new Promise((res) => setTimeout(res, 3000));
+    await new Promise((res) => setTimeout(res, 20000));
   }
 
   const errors: string[] = [];
