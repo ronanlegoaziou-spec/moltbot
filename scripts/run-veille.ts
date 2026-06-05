@@ -66,7 +66,7 @@ async function main() {
       (v) => ({ status: 'fulfilled' as const, value: v }),
       (r) => ({ status: 'rejected' as const, reason: r }),
     ));
-    await new Promise((res) => setTimeout(res, 3000));
+    await new Promise((res) => setTimeout(res, 20000));
   }
 
   const errors: string[] = [];
