@@ -20,23 +20,7 @@ import { sendBulletinToSlack, sendDmToUser } from '../src/veille/slack';
 
 const ADMIN_USER = process.env.VEILLE_ADMIN_SLACK_USER ?? 'U0AFT8CK7BR';
 
-function isMorningParis(): boolean {
-  const parts = new Intl.DateTimeFormat('fr-FR', {
-    timeZone: 'Europe/Paris',
-    hour: '2-digit',
-    hour12: false,
-  }).formatToParts(new Date());
-  const h = parseInt(parts.find((p) => p.type === 'hour')?.value ?? '12', 10);
-  return h < 11;
-}
-
 async function main() {
-  // Only run before 11:00 Paris time — crons fire at 8:15 but GitHub can delay by 2-3h
-  if (!isMorningParis()) {
-    console.log('[veille] Après 11h Paris — skipping.');
-    process.exit(0);
-  }
-
   const apiKey = process.env.ANTHROPIC_API_KEY;
   const botToken = process.env.VEILLE_SLACK_BOT_TOKEN;
   const gmailUser = process.env.GMAIL_USER;

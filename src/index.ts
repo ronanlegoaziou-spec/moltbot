@@ -27,7 +27,6 @@ import type { AppEnv, MoltbotEnv } from './types';
 import { MOLTBOT_PORT } from './config';
 import { createAccessMiddleware } from './auth';
 import { ensureMoltbotGateway, findExistingMoltbotProcess, syncToR2 } from './gateway';
-import { runVeilleMail, isVeilleWindow } from './veille';
 import { publicRoutes, api, adminUi, debug, cdp } from './routes';
 import { redactSensitiveParams } from './utils/logging';
 import loadingPageHtml from './assets/loading.html';
@@ -450,30 +449,45 @@ app.all('*', async (c) => {
  *
  * Crons configured in wrangler.jsonc:
  *  - every 5 min        — R2 backup sync
- *  - "15 6 * * 1-5"     — Veille mail CEST guard (8:15 Paris in summer, UTC+2)
- *  - "15 7 * * 1-5"     — Veille mail CET  guard (8:15 Paris in winter, UTC+1)
+ *  - "15 6 * * 1-5"     — Veille mail CEST (8:15 Paris in summer, UTC+2)
+ *  - "15 7 * * 1-5"     — Veille mail CET  (8:15 Paris in winter, UTC+1)
  *
- * Both veille crons fire daily; isVeilleWindow() lets only the one that lands
- * in the 8:00–8:30 Paris window actually run, preventing double execution.
+ * Both veille crons fire daily; only the one matching the current UTC offset
+ * will be active on a given day (CEST in summer, CET in winter). The Worker
+ * triggers a GitHub Actions workflow_dispatch for precise timing.
  */
 async function scheduled(
   event: ScheduledEvent,
   env: MoltbotEnv,
   _ctx: ExecutionContext,
 ): Promise<void> {
-  // Veille mail — runs Mon–Fri at 8:15 Paris time
+  // Veille mail — triggers GitHub Actions workflow_dispatch at 8:15 Paris time
   if (event.cron === '15 6 * * 1-5' || event.cron === '15 7 * * 1-5') {
-    if (!isVeilleWindow()) {
-      console.log('[cron] Veille cron fired outside Paris 8:00–8:30 window, skipping');
+    const token = env.GITHUB_VEILLE_TOKEN;
+    if (!token) {
+      console.error('[cron] GITHUB_VEILLE_TOKEN not set — cannot trigger veille workflow');
       return;
     }
-    console.log('[cron] Starting veille mail run...');
-    const result = await runVeilleMail(env);
-    console.log(
-      `[cron] Veille mail done — ${result.total_emails} emails, ${result.bulletins.length} bulletins, ${result.errors.length} errors`,
+    console.log('[cron] Triggering veille-mail GitHub Actions workflow...');
+    const resp = await fetch(
+      'https://api.github.com/repos/ronanlegoaziou-spec/moltbot/actions/workflows/veille-mail.yml/dispatches',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'User-Agent': 'moltbot-worker',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ ref: 'main' }),
+      },
     );
-    if (result.errors.length > 0) {
-      console.error('[cron] Veille errors:', result.errors.join(' | '));
+    if (resp.ok || resp.status === 204) {
+      console.log('[cron] Veille workflow dispatch sent successfully');
+    } else {
+      const body = await resp.text().catch(() => '');
+      console.error(`[cron] Veille workflow dispatch failed: HTTP ${resp.status} — ${body.slice(0, 200)}`);
     }
     return;
   }
