@@ -22,9 +22,9 @@ export async function analyzeClientEmails(
   anthropicApiKey: string,
 ): Promise<ClientBulletin> {
   const date = todayParis();
-  const clientEmails = emails.filter((e) => e.matched_clients.includes(client.client_id));
+  const allClientEmails = emails.filter((e) => e.matched_clients.includes(client.client_id));
 
-  if (clientEmails.length === 0) {
+  if (allClientEmails.length === 0) {
     return {
       client_id: client.client_id,
       nom_court: client.nom_court,
@@ -37,10 +37,13 @@ export async function analyzeClientEmails(
     };
   }
 
+  // Cap at 8 emails and truncate bodies to stay under rate limit (30k tokens/min)
+  const clientEmails = allClientEmails.slice(0, 8);
+
   const brief = clientEmails
     .map(
       (e) =>
-        `[Email #${e.num}] ${e.date} | De : ${e.sender} | Objet : ${e.subject}\n${e.body}`,
+        `[Email #${e.num}] ${e.date} | De : ${e.sender} | Objet : ${e.subject}\n${e.body.slice(0, 2000)}`,
     )
     .join('\n---\n');
 
@@ -129,6 +132,6 @@ Niveaux : critique = vote/décision imminente impact direct, fort = signal majeu
     signaux: parsed.signaux ?? [],
     agenda: parsed.agenda ?? [],
     ras: false,
-    emails_count: clientEmails.length,
+    emails_count: allClientEmails.length,
   };
 }
