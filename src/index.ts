@@ -24,6 +24,7 @@ import { Hono } from 'hono';
 import { getSandbox, Sandbox, type SandboxOptions } from '@cloudflare/sandbox';
 
 import type { AppEnv, MoltbotEnv } from './types';
+import { isVeilleWindow } from './veille';
 import { MOLTBOT_PORT } from './config';
 import { createAccessMiddleware } from './auth';
 import { ensureMoltbotGateway, findExistingMoltbotProcess, syncToR2 } from './gateway';
@@ -463,6 +464,12 @@ async function scheduled(
 ): Promise<void> {
   // Veille mail — triggers GitHub Actions workflow_dispatch at 8:15 Paris time
   if (event.cron === '15 6 * * 1-5' || event.cron === '15 7 * * 1-5') {
+    // Both UTC crons fire daily; only the one landing in the 8:00–8:30 Paris
+    // window dispatches, so the veille runs exactly once (CEST vs CET).
+    if (!isVeilleWindow()) {
+      console.log('[cron] Veille cron fired outside Paris 8:00–8:30 window, skipping dispatch');
+      return;
+    }
     const token = env.GITHUB_VEILLE_TOKEN;
     if (!token) {
       console.error('[cron] GITHUB_VEILLE_TOKEN not set — cannot trigger veille workflow');

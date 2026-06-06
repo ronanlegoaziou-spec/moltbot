@@ -25,7 +25,7 @@ jobs:
       - run: npm install
 
       - name: Add GITHUB_VEILLE_TOKEN secret to Worker
-        run: echo "${{ secrets.GITHUB_VEILLE_TOKEN }}" | npx wrangler secret put GITHUB_VEILLE_TOKEN
+        run: printf '%s' "${{ secrets.GH_VEILLE_TOKEN }}" | npx wrangler secret put GITHUB_VEILLE_TOKEN
         env:
           CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_API_KEY }}
           CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_EMAIL }}
