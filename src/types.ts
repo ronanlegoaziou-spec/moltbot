@@ -51,6 +51,7 @@ export interface MoltbotEnv {
   GMAIL_REFRESH_TOKEN?: string; // OAuth refresh token for Gmail API v1
   GMAIL_CLIENT_ID?: string; // Google OAuth client ID
   GMAIL_CLIENT_SECRET?: string; // Google OAuth client secret
+  GITHUB_VEILLE_TOKEN?: string; // GitHub PAT (workflow scope) to trigger veille-mail workflow_dispatch
 }
 
 /**

@@ -1,9 +1,9 @@
 name: Veille mail — Voxa
 
+# Triggered by the Cloudflare Worker cron at exactly 8:15 Paris time via the
+# GitHub API (workflow_dispatch). GitHub's own scheduled crons are unreliable
+# (delayed 2–4h), so timing is delegated to the Worker. Can also be run manually.
 on:
-  schedule:
-    - cron: '15 6 * * 1-5'
-    - cron: '15 7 * * 1-5'
   workflow_dispatch:
 
 jobs:
