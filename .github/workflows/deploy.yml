@@ -19,17 +19,34 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      # The Worker cron POSTs a workflow_dispatch to veille-mail.yml at 8:15
-      # Paris time, so it needs a GitHub PAT (workflow scope) as a Worker
-      # secret. Idempotent — re-set on every deploy to guarantee it's present.
-      - name: Set GITHUB_VEILLE_TOKEN Worker secret
-        run: printf '%s' "${{ secrets.GH_VEILLE_TOKEN }}" | npx wrangler secret put GITHUB_VEILLE_TOKEN
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-
       - name: Deploy to Cloudflare Workers
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      # The Worker cron POSTs a workflow_dispatch to veille-mail.yml at 8:15
+      # Paris time, so it needs a GitHub PAT (workflow scope) as a Worker
+      # secret. Set via the Cloudflare REST API directly — wrangler's
+      # `secret put` does an extra whoami check the scoped token can't pass.
+      # Tries the API token first, falls back to the Global API Key.
+      - name: Set GITHUB_VEILLE_TOKEN Worker secret
+        env:
+          CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_EMAIL: ${{ secrets.CLOUDFLARE_EMAIL }}
+          CF_KEY: ${{ secrets.CLOUDFLARE_API_KEY }}
+          GH_VEILLE: ${{ secrets.GH_VEILLE_TOKEN }}
+        run: |
+          URL="https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT}/workers/scripts/moltbot/secrets"
+          DATA="{\"name\":\"GITHUB_VEILLE_TOKEN\",\"text\":\"${GH_VEILLE}\",\"type\":\"secret_text\"}"
+          echo "Trying Cloudflare API token (Bearer)..."
+          resp=$(curl -s -X PUT "$URL" -H "Authorization: Bearer ${CF_TOKEN}" -H "Content-Type: application/json" --data "$DATA")
+          if echo "$resp" | grep -q '"success":true'; then echo "Secret set OK (API token)"; exit 0; fi
+          echo "API token path failed, trying Global API Key..."
+          resp2=$(curl -s -X PUT "$URL" -H "X-Auth-Email: ${CF_EMAIL}" -H "X-Auth-Key: ${CF_KEY}" -H "Content-Type: application/json" --data "$DATA")
+          if echo "$resp2" | grep -q '"success":true'; then echo "Secret set OK (Global API Key)"; exit 0; fi
+          echo "Both auth methods failed."
+          echo "API token response: $resp"
+          echo "Global key response: $resp2"
+          exit 1
