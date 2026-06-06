@@ -450,8 +450,8 @@ app.all('*', async (c) => {
  *
  * Crons configured in wrangler.jsonc:
  *  - every 5 min        — R2 backup sync
- *  - "15 6 * * 1-5"     — Veille mail CEST (8:15 Paris in summer, UTC+2)
- *  - "15 7 * * 1-5"     — Veille mail CET  (8:15 Paris in winter, UTC+1)
+ *  - "10 6 * * 1-5"     — Veille mail CEST (8:10 Paris in summer, UTC+2)
+ *  - "10 7 * * 1-5"     — Veille mail CET  (8:10 Paris in winter, UTC+1)
  *
  * Both veille crons fire daily; only the one matching the current UTC offset
  * will be active on a given day (CEST in summer, CET in winter). The Worker
@@ -462,8 +462,8 @@ async function scheduled(
   env: MoltbotEnv,
   _ctx: ExecutionContext,
 ): Promise<void> {
-  // Veille mail — triggers GitHub Actions workflow_dispatch at 8:15 Paris time
-  if (event.cron === '15 6 * * 1-5' || event.cron === '15 7 * * 1-5') {
+  // Veille mail — triggers GitHub Actions workflow_dispatch at 8:10 Paris time
+  if (event.cron === '10 6 * * 1-5' || event.cron === '10 7 * * 1-5') {
     // Both UTC crons fire daily; only the one landing in the 8:00–8:30 Paris
     // window dispatches, so the veille runs exactly once (CEST vs CET).
     if (!isVeilleWindow()) {
