@@ -50,16 +50,21 @@ jobs:
           fi
           echo "Deployed via: $AUTH"
 
+          echo "Setting Worker secret GITHUB_VEILLE_TOKEN..."
           URL="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts/moltbot/secrets"
           DATA="{\"name\":\"GITHUB_VEILLE_TOKEN\",\"text\":\"${GH_VEILLE}\",\"type\":\"secret_text\"}"
           if [ "$AUTH" = token ]; then
-            R=$(curl -s -X PUT "$URL" -H "Authorization: Bearer ${CF_TOKEN}" -H "Content-Type: application/json" --data "$DATA")
+            R=$(curl -s -w $'\n%{http_code}' -X PUT "$URL" -H "Authorization: Bearer ${CF_TOKEN}" -H "Content-Type: application/json" --data "$DATA")
           else
-            R=$(curl -s -X PUT "$URL" -H "X-Auth-Email: ${CF_EMAIL}" -H "X-Auth-Key: ${CF_KEY}" -H "Content-Type: application/json" --data "$DATA")
+            R=$(curl -s -w $'\n%{http_code}' -X PUT "$URL" -H "X-Auth-Email: ${CF_EMAIL}" -H "X-Auth-Key: ${CF_KEY}" -H "Content-Type: application/json" --data "$DATA")
           fi
-          if echo "$R" | grep -q '"success":true'; then
+          CODE=$(printf '%s' "$R" | tail -n1)
+          BODY=$(printf '%s' "$R" | sed '$d')
+          echo "HTTP $CODE"
+          echo "Response (redacted): $(printf '%s' "$BODY" | sed "s/${GH_VEILLE}/***/g")"
+          if printf '%s' "$BODY" | grep -qE '"success":[[:space:]]*true'; then
             echo "Secret GITHUB_VEILLE_TOKEN set OK"
           else
-            echo "Secret PUT failed: $(echo "$R" | grep -o '"code":[0-9]*\|"message":"[^"]*"' | head)"
+            echo "Secret PUT failed (see response above)"
             exit 1
           fi
