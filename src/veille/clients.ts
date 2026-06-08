@@ -64,6 +64,13 @@ export const CLIENTS: ClientConfig[] = [
       'viande bovine',
       'Mercosur',
       'volaille',
+      // Distribution physique / implantation
+      'centres commerciaux',
+      'centre commercial',
+      'commerce de proximité',
+      'commerce de détail',
+      'food court',
+      'zone commerciale',
     ],
     slack_channel_id: 'C0AGMK2EFKK', // #bertrand-franchise
     notion_hub_id: '33c5afd3-7b97-810e-ab45-e7113723892a',
@@ -200,6 +207,13 @@ export const CLIENTS: ClientConfig[] = [
       'droits de douane',
       'souveraineté alimentaire',
       'shrinkflation',
+      // Distribution physique / implantation
+      'centres commerciaux',
+      'centre commercial',
+      'commerce de détail',
+      'zone commerciale',
+      'commerce alimentaire',
+      'retail',
     ],
     slack_channel_id: 'C0AQPHFKFA8', // #lidl
     notion_hub_id: '33c5afd3-7b97-819c-b188-ff11dd1721db',
