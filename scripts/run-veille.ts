@@ -16,6 +16,7 @@ import { CLIENTS } from '../src/veille/clients';
 import { tagEmailsByClient } from '../src/veille/gmail';
 import { fetchImapEmails } from '../src/veille/gmail-imap';
 import { analyzeClientEmails } from '../src/veille/analyze';
+import { preAnalyzeEmailRelevance } from '../src/veille/pre-analyze';
 import { sendBulletinToSlack, sendDmToUser } from '../src/veille/slack';
 
 const ADMIN_USER = process.env.VEILLE_ADMIN_SLACK_USER ?? 'U0AFT8CK7BR';
@@ -53,7 +54,30 @@ async function main() {
     process.exit(1);
   }
 
-  const taggedEmails = tagEmailsByClient(emails, CLIENTS);
+  const keywordTagged = tagEmailsByClient(emails, CLIENTS);
+
+  // Pre-analysis: thematic routing via Claude Haiku (fast, cheap, catches contextual relevance)
+  console.log('[veille] Running thematic pre-analysis...');
+  const preMap = await preAnalyzeEmailRelevance(emails, CLIENTS, apiKey!).catch((err) => {
+    console.warn('[veille] pre-analyze failed (non-fatal):', err instanceof Error ? err.message : String(err));
+    return new Map<number, string[]>();
+  });
+
+  // Merge: add any clients suggested by pre-analysis not already caught by keywords
+  let preAdditions = 0;
+  const taggedEmails = keywordTagged.map((email) => {
+    const suggested = preMap.get(email.num) ?? [];
+    const newClients = suggested.filter((id) => !email.matched_clients.includes(id));
+    if (newClients.length === 0) return email;
+    preAdditions++;
+    return {
+      ...email,
+      matched_clients: [...email.matched_clients, ...newClients],
+      matched_keywords: [...email.matched_keywords, '[pré-analyse thématique]'],
+    };
+  });
+
+  console.log(`[veille] pre-analyze: ${preAdditions} additional email-client tag(s) added`);
   for (const client of CLIENTS) {
     const count = taggedEmails.filter((e) => e.matched_clients.includes(client.client_id)).length;
     console.log(`[veille] ${client.client_id}: ${count} email(s) tagged`);
