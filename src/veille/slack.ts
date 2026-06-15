@@ -8,15 +8,16 @@ const NIVEAU_ICONS: Record<string, string> = {
 };
 
 function formatEmailSection(bulletin: ClientBulletin): string {
-  const hasParlement = !!bulletin.parliament;
+  const hasParlSignals = !!bulletin.parliament?.has_signals;
   const header = `📊 *Veille Voxa — ${bulletin.date} — ${bulletin.nom_court}*`;
 
-  if (bulletin.ras && !hasParlement) {
-    return `${header}\n_Aucun signal email ni parlementaire détecté aujourd'hui._`;
-  }
-
   if (bulletin.ras) {
-    return `${header}\n_Aucun signal dans les sources email suivies aujourd'hui._\n_↓ Voir thread pour les signaux parlementaires_`;
+    const parl = hasParlSignals
+      ? `\n_🏛️ ${bulletin.parliament!.signal_count} signal(aux) parlementaire(s) ↓ thread_`
+      : bulletin.parliament
+        ? '\n_🏛️ Aucun signal parlementaire aujourd\'hui._'
+        : '';
+    return `${header}\n_Aucun signal dans les sources email suivies aujourd'hui._${parl}`;
   }
 
   const lines: string[] = [header, ''];
@@ -93,12 +94,10 @@ export async function sendBulletinToSlack(
   const emailText = formatEmailSection(bulletin);
   const ts = await postToSlack(channelId, emailText, botToken);
 
-  // Thread reply: parliamentary signals from pappers-maison
-  if (ts && bulletin.parliament) {
-    const threadText = bulletin.parliament.has_signals
-      ? bulletin.parliament.slack_text
-      : `🏛️ *Récap parlementaire — ${bulletin.nom_court}*\n_Aucun signal parlementaire détecté sur les dernières 24h._`;
-    await postToSlack(channelId, threadText, botToken, ts);
+  // Thread reply: parliamentary signals (only when there is actual content;
+  // the "no signal" status is already shown inline in the main message footer)
+  if (ts && bulletin.parliament?.has_signals && bulletin.parliament.slack_text) {
+    await postToSlack(channelId, bulletin.parliament.slack_text, botToken, ts);
   }
 
   return ts;

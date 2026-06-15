@@ -17,7 +17,12 @@ import { tagEmailsByClient } from '../src/veille/gmail';
 import { fetchImapEmails } from '../src/veille/gmail-imap';
 import { analyzeClientEmails } from '../src/veille/analyze';
 import { preAnalyzeEmailRelevance } from '../src/veille/pre-analyze';
-import { readParliamentData } from '../src/veille/parliament';
+import {
+  fetchParliamentItems,
+  isoDaysAgo,
+  parisWeekday,
+} from '../src/veille/parliament-fetch';
+import { analyzeParliamentForClient } from '../src/veille/parliament-analyze';
 import { sendBulletinToSlack, sendDmToUser } from '../src/veille/slack';
 import type { ParliamentData } from '../src/veille/types';
 
@@ -40,30 +45,16 @@ async function main() {
     process.exit(1);
   }
 
-  // Read parliamentary data from R2 (written by pappers-maison at 7:30)
-  const r2AccountId = process.env.CF_ACCOUNT_ID;
-  const r2AccessKeyId = process.env.R2_ACCESS_KEY_ID;
-  const r2SecretKey = process.env.R2_SECRET_ACCESS_KEY;
+  // Fetch parliamentary open data directly (autonomous — no Voxa server dependency).
+  // Monday widens the window to 3 days to cover the weekend.
   const parliamentMap = new Map<string, ParliamentData>();
-
-  if (r2AccountId && r2AccessKeyId && r2SecretKey) {
-    console.log('[veille] Reading parliamentary data from R2...');
-    const results = await Promise.allSettled(
-      CLIENTS.map((c) =>
-        readParliamentData(c.client_id, r2AccountId, r2AccessKeyId, r2SecretKey).then(
-          (data) => ({ client_id: c.client_id, data }),
-        ),
-      ),
-    );
-    for (const r of results) {
-      if (r.status === 'fulfilled' && r.value.data) {
-        parliamentMap.set(r.value.client_id, r.value.data);
-      }
-    }
-    console.log(`[veille] Parliament data: ${parliamentMap.size}/${CLIENTS.length} clients loaded`);
-  } else {
-    console.log('[veille] R2 not configured — skipping parliamentary data');
-  }
+  const lookbackDays = parisWeekday() === 1 ? 3 : 1;
+  console.log(`[veille] Fetching parliamentary open data (lookback ${lookbackDays}d)...`);
+  const parliamentItems = await fetchParliamentItems(isoDaysAgo(lookbackDays)).catch((err) => {
+    console.warn('[veille] parliament fetch failed (non-fatal):', err instanceof Error ? err.message : String(err));
+    return [];
+  });
+  console.log(`[veille] ${parliamentItems.length} parliamentary item(s) in window`);
 
   console.log('[veille] Fetching emails via IMAP...');
   let emails: Awaited<ReturnType<typeof fetchImapEmails>>;
@@ -110,13 +101,24 @@ async function main() {
     console.log(`[veille] ${client.client_id}: ${count} email(s) tagged`);
   }
 
-  // Stagger Claude API calls to stay under 30k tokens/min rate limit
+  // Stagger Claude API calls to stay under 30k tokens/min rate limit.
+  // For each client: email analysis + parliamentary analysis.
   const analyses: PromiseSettledResult<Awaited<ReturnType<typeof analyzeClientEmails>>>[] = [];
   for (const client of CLIENTS) {
     analyses.push(await Promise.resolve(analyzeClientEmails(client, taggedEmails, apiKey!)).then(
       (v) => ({ status: 'fulfilled' as const, value: v }),
       (r) => ({ status: 'rejected' as const, reason: r }),
     ));
+
+    // Parliamentary analysis (non-fatal — never blocks the email bulletin)
+    try {
+      const parl = await analyzeParliamentForClient(client, parliamentItems, apiKey!);
+      parliamentMap.set(client.client_id, parl);
+      console.log(`[veille] parliament ${client.client_id}: ${parl.signal_count} signal(s)`);
+    } catch (err) {
+      console.warn(`[veille] parliament analysis failed for ${client.client_id}:`, err instanceof Error ? err.message : String(err));
+    }
+
     await new Promise((res) => setTimeout(res, 20000));
   }
 
