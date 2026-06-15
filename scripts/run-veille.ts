@@ -101,10 +101,20 @@ async function main() {
     console.log(`[veille] ${client.client_id}: ${count} email(s) tagged`);
   }
 
+  // Optional single-client mode (validation / targeted reruns).
+  // VEILLE_ONLY_CLIENT=sodiaal limits analysis + Slack posting to one client.
+  const onlyClient = process.env.VEILLE_ONLY_CLIENT?.trim() || 'sodiaal';
+  const activeClients = onlyClient
+    ? CLIENTS.filter((c) => c.client_id === onlyClient)
+    : CLIENTS;
+  if (onlyClient) {
+    console.log(`[veille] ONLY_CLIENT mode: ${onlyClient} (${activeClients.length} client)`);
+  }
+
   // Stagger Claude API calls to stay under 30k tokens/min rate limit.
   // For each client: email analysis + parliamentary analysis.
   const analyses: PromiseSettledResult<Awaited<ReturnType<typeof analyzeClientEmails>>>[] = [];
-  for (const client of CLIENTS) {
+  for (const client of activeClients) {
     analyses.push(await Promise.resolve(analyzeClientEmails(client, taggedEmails, apiKey!)).then(
       (v) => ({ status: 'fulfilled' as const, value: v }),
       (r) => ({ status: 'rejected' as const, reason: r }),
@@ -124,8 +134,8 @@ async function main() {
 
   const errors: string[] = [];
 
-  for (let i = 0; i < CLIENTS.length; i++) {
-    const client = CLIENTS[i];
+  for (let i = 0; i < activeClients.length; i++) {
+    const client = activeClients[i];
     const settlement = analyses[i];
 
     if (settlement.status === 'rejected') {
