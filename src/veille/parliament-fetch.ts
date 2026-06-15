@@ -121,17 +121,19 @@ function toIsoDate(raw: string | undefined): string | undefined {
 export async function fetchSenatQuestions(sinceIso: string): Promise<ParliamentItem[]> {
   const url = 'https://data.senat.fr/data/questions/questions-depuis-un-an.csv';
   const resp = await fetch(url, { headers: { 'User-Agent': 'moltbot-veille' } });
+  // TEMP DEBUG — inspect HTTP response in the runner
+  console.log(`[veille][debug] senat fetch: HTTP ${resp.status}, content-type=${resp.headers.get('content-type')}, len=${resp.headers.get('content-length')}`);
   if (!resp.ok) throw new Error(`Sénat CSV HTTP ${resp.status}`);
 
   // CSV is ISO-8859-1 (latin-1), semicolon-separated
   const buf = await resp.arrayBuffer();
   const text = new TextDecoder('latin1').decode(buf);
+  console.log(`[veille][debug] senat body: ${text.length} chars; head=${JSON.stringify(text.slice(0, 300))}`);
   const rows = parseCsv(text, ';');
+  console.log(`[veille][debug] senat parsed rows: ${rows.length}; row0 cols=${rows[0]?.length}`);
   if (rows.length < 2) return [];
 
   const headers = rows[0];
-  // TEMP DEBUG — inspect real CSV structure in the runner
-  console.log(`[veille][debug] senat CSV: ${rows.length} rows, content-type=${resp.headers.get('content-type')}`);
   console.log(`[veille][debug] headers (${headers.length}): ${JSON.stringify(headers)}`);
   if (rows[1]) console.log(`[veille][debug] sample row: ${JSON.stringify(rows[1].slice(0, 14))}`);
   const cRef = findCol(headers, ['reference'], ['numero']);
