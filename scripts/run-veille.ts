@@ -103,7 +103,7 @@ async function main() {
 
   // Optional single-client mode (validation / targeted reruns).
   // VEILLE_ONLY_CLIENT=sodiaal limits analysis + Slack posting to one client.
-  const onlyClient = process.env.VEILLE_ONLY_CLIENT?.trim() || 'sodiaal';
+  const onlyClient = process.env.VEILLE_ONLY_CLIENT?.trim() || '';
   const activeClients = onlyClient
     ? CLIENTS.filter((c) => c.client_id === onlyClient)
     : CLIENTS;
