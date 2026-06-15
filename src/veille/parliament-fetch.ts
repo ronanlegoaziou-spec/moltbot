@@ -308,15 +308,19 @@ export async function fetchAnQuestions(sinceIso: string): Promise<ParliamentItem
 }
 
 /**
- * Fetches all configured parliamentary sources for the given lookback window.
- * Returns a flat, deduplicated list of items. Each source is isolated.
+ * Fetches all configured parliamentary sources.
+ *
+ * Sénat CSV is refreshed live (dual-date, often future-dated réponses), so it
+ * uses the short window. The AN static open-data dumps lag ~6 days, so AN uses
+ * a wider window to surface recent items despite the publication delay.
  */
 export async function fetchParliamentItems(sinceIso: string): Promise<ParliamentItem[]> {
   const all: ParliamentItem[] = [];
+  const anSince = isoDaysAgo(8); // AN dump lags ~6 days
 
   const sources: Array<[string, () => Promise<ParliamentItem[]>]> = [
     ['senat-questions', () => fetchSenatQuestions(sinceIso)],
-    ['an-questions', () => fetchAnQuestions(sinceIso)],
+    ['an-questions', () => fetchAnQuestions(anSince)],
   ];
 
   for (const [name, fn] of sources) {
