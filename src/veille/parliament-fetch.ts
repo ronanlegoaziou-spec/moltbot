@@ -10,8 +10,8 @@
 import { unzipSync } from 'fflate';
 
 export interface ParliamentItem {
-  source: 'senat' | 'an';
-  sous_type: string; // QE / QG / QOSD / QC
+  source: 'senat' | 'an' | 'jorf';
+  sous_type: string; // QE / QG / QOSD / QC / nomination
   titre: string;
   auteur?: string;
   groupe?: string;
@@ -307,6 +307,70 @@ export async function fetchAnQuestions(sinceIso: string): Promise<ParliamentItem
   return items;
 }
 
+// PISTE / Légifrance credentials (cabinet Voxa own API account).
+const PISTE_CLIENT_ID = process.env.PISTE_CLIENT_ID ?? '182f04c3-cf27-43ec-8d71-af20929fb0d0';
+const PISTE_CLIENT_SECRET = process.env.PISTE_CLIENT_SECRET ?? '9ba8ba82-ab61-43b6-9da4-91071f871d5f';
+
+async function pisteToken(): Promise<string> {
+  const body = new URLSearchParams({
+    grant_type: 'client_credentials',
+    client_id: PISTE_CLIENT_ID,
+    client_secret: PISTE_CLIENT_SECRET,
+    scope: 'openid',
+  });
+  const resp = await fetch('https://oauth.piste.gouv.fr/api/oauth/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
+  });
+  if (!resp.ok) throw new Error(`PISTE oauth HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+  const data = (await resp.json()) as { access_token?: string };
+  if (!data.access_token) throw new Error('PISTE oauth: no access_token');
+  return data.access_token;
+}
+
+/**
+ * Fetch recent JORF entries (focus: nominations) via the Légifrance search API.
+ * First-run debug: dumps the raw response shape to confirm the schema.
+ */
+export async function fetchJorf(sinceIso: string): Promise<ParliamentItem[]> {
+  const token = await pisteToken();
+  console.log('[veille][debug] JORF: PISTE token acquired');
+
+  const payload = {
+    recherche: {
+      champs: [
+        {
+          typeChamp: 'ALL',
+          criteres: [{ typeRecherche: 'UN_DES_MOTS', valeur: 'nomination', operateur: 'ET' }],
+          operateur: 'ET',
+        },
+      ],
+      filtres: [{ facette: 'DATE_PUBLICATION', dates: { start: sinceIso, end: isoDaysAgo(0) } }],
+      pageNumber: 1,
+      pageSize: 20,
+      operateur: 'ET',
+      sort: 'PUBLICATION_DATE_DESC',
+      typePagination: 'DEFAUT',
+    },
+    fond: 'JORF',
+  };
+
+  const resp = await fetch('https://api.piste.gouv.fr/dila/legifrance/lf-engine-app/search', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const text = await resp.text();
+  console.log(`[veille][debug] JORF search HTTP ${resp.status}; head=${text.slice(0, 700)}`);
+  return [];
+}
+
 /**
  * Fetches all configured parliamentary sources.
  *
@@ -321,6 +385,7 @@ export async function fetchParliamentItems(sinceIso: string): Promise<Parliament
   const sources: Array<[string, () => Promise<ParliamentItem[]>]> = [
     ['senat-questions', () => fetchSenatQuestions(sinceIso)],
     ['an-questions', () => fetchAnQuestions(anSince)],
+    ['jorf', () => fetchJorf(sinceIso)],
   ];
 
   for (const [name, fn] of sources) {
