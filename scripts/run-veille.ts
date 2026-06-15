@@ -17,7 +17,9 @@ import { tagEmailsByClient } from '../src/veille/gmail';
 import { fetchImapEmails } from '../src/veille/gmail-imap';
 import { analyzeClientEmails } from '../src/veille/analyze';
 import { preAnalyzeEmailRelevance } from '../src/veille/pre-analyze';
+import { readParliamentData } from '../src/veille/parliament';
 import { sendBulletinToSlack, sendDmToUser } from '../src/veille/slack';
+import type { ParliamentData } from '../src/veille/types';
 
 const ADMIN_USER = process.env.VEILLE_ADMIN_SLACK_USER ?? 'U0AFT8CK7BR';
 
@@ -36,6 +38,31 @@ async function main() {
   if (missing.length > 0) {
     console.error(`[veille] Secrets manquants : ${missing.join(', ')}`);
     process.exit(1);
+  }
+
+  // Read parliamentary data from R2 (written by pappers-maison at 7:30)
+  const r2AccountId = process.env.CF_ACCOUNT_ID;
+  const r2AccessKeyId = process.env.R2_ACCESS_KEY_ID;
+  const r2SecretKey = process.env.R2_SECRET_ACCESS_KEY;
+  const parliamentMap = new Map<string, ParliamentData>();
+
+  if (r2AccountId && r2AccessKeyId && r2SecretKey) {
+    console.log('[veille] Reading parliamentary data from R2...');
+    const results = await Promise.allSettled(
+      CLIENTS.map((c) =>
+        readParliamentData(c.client_id, r2AccountId, r2AccessKeyId, r2SecretKey).then(
+          (data) => ({ client_id: c.client_id, data }),
+        ),
+      ),
+    );
+    for (const r of results) {
+      if (r.status === 'fulfilled' && r.value.data) {
+        parliamentMap.set(r.value.client_id, r.value.data);
+      }
+    }
+    console.log(`[veille] Parliament data: ${parliamentMap.size}/${CLIENTS.length} clients loaded`);
+  } else {
+    console.log('[veille] R2 not configured — skipping parliamentary data');
   }
 
   console.log('[veille] Fetching emails via IMAP...');
@@ -108,10 +135,15 @@ async function main() {
 
     const bulletin = settlement.value;
 
+    // Attach parliamentary data if available
+    const parliament = parliamentMap.get(client.client_id);
+    if (parliament) bulletin.parliament = parliament;
+
     try {
       const ts = await sendBulletinToSlack(bulletin, client.slack_channel_id, botToken!);
+      const parl = bulletin.parliament ? ` + ${bulletin.parliament.signal_count} parl` : '';
       console.log(
-        `[veille] Sent ${client.client_id} (${bulletin.ras ? 'RAS' : `${bulletin.signaux.length} signals`})${ts ? ` ts=${ts}` : ''}`,
+        `[veille] Sent ${client.client_id} (${bulletin.ras ? 'RAS' : `${bulletin.signaux.length} signals`}${parl})${ts ? ` ts=${ts}` : ''}`,
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

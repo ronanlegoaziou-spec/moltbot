@@ -7,11 +7,16 @@ const NIVEAU_ICONS: Record<string, string> = {
   faible: '⚪',
 };
 
-function formatBulletin(bulletin: ClientBulletin): string {
-  const header = `📬 *Veille mail — ${bulletin.date} — ${bulletin.nom_court}*`;
+function formatEmailSection(bulletin: ClientBulletin): string {
+  const hasParlement = !!bulletin.parliament;
+  const header = `📊 *Veille Voxa — ${bulletin.date} — ${bulletin.nom_court}*`;
+
+  if (bulletin.ras && !hasParlement) {
+    return `${header}\n_Aucun signal email ni parlementaire détecté aujourd'hui._`;
+  }
 
   if (bulletin.ras) {
-    return `${header}\n_Aucun signal dans les sources email suivies aujourd'hui._`;
+    return `${header}\n_Aucun signal dans les sources email suivies aujourd'hui._\n_↓ Voir thread pour les signaux parlementaires_`;
   }
 
   const lines: string[] = [header, ''];
@@ -26,7 +31,7 @@ function formatBulletin(bulletin: ClientBulletin): string {
       .filter((n) => counts[n] > 0)
       .map((n) => `${NIVEAU_ICONS[n]} ${counts[n]} ${n}`);
 
-    lines.push(`*Signaux :* ${countParts.join('  ')}`);
+    lines.push(`*Signaux email :* ${countParts.join('  ')}`);
     lines.push('');
 
     for (const signal of bulletin.signaux) {
@@ -45,9 +50,38 @@ function formatBulletin(bulletin: ClientBulletin): string {
   }
 
   const n = bulletin.emails_count;
-  lines.push(`_${n} email${n > 1 ? 's' : ''} analysé${n > 1 ? 's' : ''} sur 24h_`);
+  const parliamentNote =
+    bulletin.parliament?.has_signals
+      ? ` · 🏛️ ${bulletin.parliament.signal_count} signaux parlementaires ↓ thread`
+      : bulletin.parliament
+        ? ' · 🏛️ Aucun signal parlementaire aujourd\'hui'
+        : '';
+  lines.push(`_${n} email${n > 1 ? 's' : ''} analysé${n > 1 ? 's' : ''}${parliamentNote}_`);
 
   return lines.join('\n');
+}
+
+async function postToSlack(
+  channelId: string,
+  text: string,
+  botToken: string,
+  threadTs?: string,
+): Promise<string | null> {
+  const body: Record<string, unknown> = { channel: channelId, text, mrkdwn: true };
+  if (threadTs) body.thread_ts = threadTs;
+
+  const response = await fetch('https://slack.com/api/chat.postMessage', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${botToken}` },
+    body: JSON.stringify(body),
+  });
+
+  const data = (await response.json()) as { ok: boolean; ts?: string; error?: string };
+  if (!data.ok) {
+    console.error(`[veille] Slack error (${channelId}): ${data.error}`);
+    return null;
+  }
+  return data.ts ?? null;
 }
 
 export async function sendBulletinToSlack(
@@ -55,24 +89,19 @@ export async function sendBulletinToSlack(
   channelId: string,
   botToken: string,
 ): Promise<string | null> {
-  const text = formatBulletin(bulletin);
-  const response = await fetch('https://slack.com/api/chat.postMessage', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${botToken}`,
-    },
-    body: JSON.stringify({ channel: channelId, text, mrkdwn: true }),
-  });
+  // Main message: email analysis
+  const emailText = formatEmailSection(bulletin);
+  const ts = await postToSlack(channelId, emailText, botToken);
 
-  const data = (await response.json()) as { ok: boolean; ts?: string; error?: string };
-
-  if (!data.ok) {
-    console.error(`[veille] Slack error (${channelId}): ${data.error}`);
-    return null;
+  // Thread reply: parliamentary signals from pappers-maison
+  if (ts && bulletin.parliament) {
+    const threadText = bulletin.parliament.has_signals
+      ? bulletin.parliament.slack_text
+      : `🏛️ *Récap parlementaire — ${bulletin.nom_court}*\n_Aucun signal parlementaire détecté sur les dernières 24h._`;
+    await postToSlack(channelId, threadText, botToken, ts);
   }
 
-  return data.ts ?? null;
+  return ts;
 }
 
 export async function sendDmToUser(
@@ -83,10 +112,7 @@ export async function sendDmToUser(
   try {
     await fetch('https://slack.com/api/chat.postMessage', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${botToken}`,
-      },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${botToken}` },
       body: JSON.stringify({ channel: userId, text }),
     });
   } catch {

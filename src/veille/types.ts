@@ -32,6 +32,15 @@ export interface ClientSignal {
   email_num?: number;
 }
 
+export interface ParliamentData {
+  client_id: string;
+  date: string;
+  run_at_utc: string;
+  has_signals: boolean;
+  signal_count: number;
+  slack_text: string;
+}
+
 export interface ClientBulletin {
   client_id: string;
   nom_court: string;
@@ -41,6 +50,7 @@ export interface ClientBulletin {
   agenda: string[];
   ras: boolean;
   emails_count: number;
+  parliament?: ParliamentData | null;
 }
 
 export interface VeilleRunResult {
