@@ -335,7 +335,6 @@ async function pisteToken(): Promise<string> {
  */
 export async function fetchJorf(sinceIso: string): Promise<ParliamentItem[]> {
   const token = await pisteToken();
-  console.log('[veille][debug] JORF: PISTE token acquired');
 
   const payload = {
     recherche: {
@@ -348,7 +347,7 @@ export async function fetchJorf(sinceIso: string): Promise<ParliamentItem[]> {
       ],
       filtres: [{ facette: 'DATE_PUBLICATION', dates: { start: sinceIso, end: isoDaysAgo(0) } }],
       pageNumber: 1,
-      pageSize: 20,
+      pageSize: 50,
       operateur: 'ET',
       sort: 'PUBLICATION_DATE_DESC',
       typePagination: 'DEFAUT',
@@ -365,10 +364,37 @@ export async function fetchJorf(sinceIso: string): Promise<ParliamentItem[]> {
     },
     body: JSON.stringify(payload),
   });
+  if (!resp.ok) throw new Error(`JORF search HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
 
-  const text = await resp.text();
-  console.log(`[veille][debug] JORF search HTTP ${resp.status}; head=${text.slice(0, 700)}`);
-  return [];
+  const data = (await resp.json()) as {
+    results?: Array<{
+      titles?: Array<{ id?: string; cid?: string; title?: string }>;
+      nature?: string;
+      datePublication?: string;
+      nor?: string;
+    }>;
+  };
+
+  const items: ParliamentItem[] = [];
+  for (const res of data.results ?? []) {
+    const t = res.titles?.[0];
+    const titre = stripHtml(t?.title);
+    if (!titre) continue;
+    const date = res.datePublication ? res.datePublication.slice(0, 10) : undefined;
+    const cid = t?.cid ?? t?.id?.split('_')[0];
+    items.push({
+      source: 'jorf',
+      sous_type: 'nomination',
+      titre,
+      rubrique: res.nature ?? undefined,
+      ministere: res.nor ?? undefined,
+      date,
+      a_reponse: false,
+      url: cid ? `https://www.legifrance.gouv.fr/jorf/id/${cid}` : 'https://www.legifrance.gouv.fr/jorf/jo',
+    });
+  }
+  console.log(`[veille] jorf: ${items.length} nomination(s) since ${sinceIso}`);
+  return items;
 }
 
 /**
