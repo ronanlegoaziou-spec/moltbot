@@ -121,55 +121,56 @@ function toIsoDate(raw: string | undefined): string | undefined {
 export async function fetchSenatQuestions(sinceIso: string): Promise<ParliamentItem[]> {
   const url = 'https://data.senat.fr/data/questions/questions-depuis-un-an.csv';
   const resp = await fetch(url, { headers: { 'User-Agent': 'moltbot-veille' } });
-  // TEMP DEBUG — inspect HTTP response in the runner
-  console.log(`[veille][debug] senat fetch: HTTP ${resp.status}, content-type=${resp.headers.get('content-type')}, len=${resp.headers.get('content-length')}`);
   if (!resp.ok) throw new Error(`Sénat CSV HTTP ${resp.status}`);
 
   // CSV is ISO-8859-1 (latin-1), semicolon-separated
   const buf = await resp.arrayBuffer();
   const text = new TextDecoder('latin1').decode(buf);
-  console.log(`[veille][debug] senat body: ${text.length} chars; head=${JSON.stringify(text.slice(0, 300))}`);
   const rows = parseCsv(text, ';');
-  console.log(`[veille][debug] senat parsed rows: ${rows.length}; row0 cols=${rows[0]?.length}`);
   if (rows.length < 2) return [];
 
   const headers = rows[0];
-  console.log(`[veille][debug] headers (${headers.length}): ${JSON.stringify(headers)}`);
-  if (rows[1]) console.log(`[veille][debug] sample row: ${JSON.stringify(rows[1].slice(0, 14))}`);
-  const cRef = findCol(headers, ['reference'], ['numero']);
-  const cType = findCol(headers, ['type']);
-  const cTitre = findCol(headers, ['intitule'], ['titre'], ['objet']);
-  const cAuteur = findCol(headers, ['auteur']);
+  const cNature = findCol(headers, ['nature']); // QE / QG / QOSD / QC
+  const cTitre = findCol(headers, ['titre'], ['intitule'], ['objet']);
+  const cNom = findCol(headers, ['nom']); // "Nom"
+  const cPrenom = findCol(headers, ['prenom']); // "Prénom"
   const cGroupe = findCol(headers, ['groupe']);
-  const cMin = findCol(headers, ['ministereinterroge'], ['ministere']);
-  const cRub = findCol(headers, ['rubrique'], ['theme']);
-  const cDate = findCol(headers, ['datedepot'], ['datepublication'], ['date']);
-  const cDateRep = findCol(headers, ['datereponse']);
-  console.log(`[veille][debug] cols ref=${cRef} type=${cType} titre=${cTitre} auteur=${cAuteur} min=${cMin} rub=${cRub} date=${cDate} dateRep=${cDateRep}`);
+  const cMinDepot = findCol(headers, ['ministere', 'depot'], ['ministere', 'interroge']);
+  const cMinRep = findCol(headers, ['ministere', 'reponse']);
+  const cRub = findCol(headers, ['themes'], ['theme'], ['rubrique']);
+  const cDate = findCol(headers, ['date', 'publication'], ['datedepot'], ['date']);
+  const cDateRep = findCol(headers, ['date', 'reponse']);
+  const cUrl = findCol(headers, ['url']);
 
   const items: ParliamentItem[] = [];
+  let maxDate = '';
+  let maxRep = '';
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r];
-    if (row.length < headers.length - 2) continue;
+    if (row.length < 5) continue;
     const get = (idx: number) => (idx >= 0 && idx < row.length ? row[idx].trim() : '');
 
     const date = toIsoDate(get(cDate));
     const dateRep = toIsoDate(get(cDateRep));
+    if (date && date > maxDate) maxDate = date;
+    if (dateRep && dateRep > maxRep) maxRep = dateRep;
+
     const dateOk = date && date >= sinceIso;
     const repOk = dateRep && dateRep >= sinceIso;
     if (!dateOk && !repOk) continue;
 
-    const ref = get(cRef);
     const titre = get(cTitre);
     if (!titre) continue;
 
-    const year = (dateRep ?? date ?? '').slice(0, 4) || new Date().getFullYear().toString();
-    const sousTypeRaw = get(cType).toUpperCase();
-    const sousType = /QG|GOUV/.test(sousTypeRaw)
-      ? 'QG'
-      : /QOSD|ORALE/.test(sousTypeRaw)
-        ? 'QOSD'
-        : /QC|CRISE/.test(sousTypeRaw)
+    const nom = [get(cPrenom), get(cNom)].filter(Boolean).join(' ').trim();
+    const ministere = (dateRep ? get(cMinRep) : '') || get(cMinDepot) || undefined;
+
+    const natureRaw = get(cNature).toUpperCase();
+    const sousType = /QOSD|ORALE\s+SANS/.test(natureRaw)
+      ? 'QOSD'
+      : /QG|GOUVERNEMENT/.test(natureRaw)
+        ? 'QG'
+        : /QC|CRISE/.test(natureRaw)
           ? 'QC'
           : 'QE';
 
@@ -177,16 +178,17 @@ export async function fetchSenatQuestions(sinceIso: string): Promise<ParliamentI
       source: 'senat',
       sous_type: sousType,
       titre,
-      auteur: get(cAuteur) || undefined,
+      auteur: nom || undefined,
       groupe: get(cGroupe) || undefined,
-      ministere: get(cMin) || undefined,
+      ministere,
       rubrique: get(cRub) || undefined,
       date,
       date_reponse: dateRep,
       a_reponse: !!dateRep,
-      url: ref ? `https://www.senat.fr/questions/base/${year}/q${ref}.html` : 'https://www.senat.fr/questions/',
+      url: get(cUrl) || 'https://www.senat.fr/questions/',
     });
   }
+  console.log(`[veille][debug] senat maxDate=${maxDate} maxRep=${maxRep} since=${sinceIso} matched=${items.length}`);
   return items;
 }
 
