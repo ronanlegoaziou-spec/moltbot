@@ -130,6 +130,10 @@ export async function fetchSenatQuestions(sinceIso: string): Promise<ParliamentI
   if (rows.length < 2) return [];
 
   const headers = rows[0];
+  // TEMP DEBUG — inspect real CSV structure in the runner
+  console.log(`[veille][debug] senat CSV: ${rows.length} rows, content-type=${resp.headers.get('content-type')}`);
+  console.log(`[veille][debug] headers (${headers.length}): ${JSON.stringify(headers)}`);
+  if (rows[1]) console.log(`[veille][debug] sample row: ${JSON.stringify(rows[1].slice(0, 14))}`);
   const cRef = findCol(headers, ['reference'], ['numero']);
   const cType = findCol(headers, ['type']);
   const cTitre = findCol(headers, ['intitule'], ['titre'], ['objet']);
@@ -139,6 +143,7 @@ export async function fetchSenatQuestions(sinceIso: string): Promise<ParliamentI
   const cRub = findCol(headers, ['rubrique'], ['theme']);
   const cDate = findCol(headers, ['datedepot'], ['datepublication'], ['date']);
   const cDateRep = findCol(headers, ['datereponse']);
+  console.log(`[veille][debug] cols ref=${cRef} type=${cType} titre=${cTitre} auteur=${cAuteur} min=${cMin} rub=${cRub} date=${cDate} dateRep=${cDateRep}`);
 
   const items: ParliamentItem[] = [];
   for (let r = 1; r < rows.length; r++) {
