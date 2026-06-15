@@ -196,49 +196,112 @@ export async function fetchSenatQuestions(sinceIso: string): Promise<ParliamentI
 
 const AN_QUESTION_ZIPS: Array<[string, string]> = [
   ['QG', 'http://data.assemblee-nationale.fr/static/openData/repository/17/questions/questions_gouvernement/Questions_gouvernement.json.zip'],
+  ['QOSD', 'http://data.assemblee-nationale.fr/static/openData/repository/17/questions/questions_orales_sans_debat/Questions_orales_sans_debat.json.zip'],
+  ['QE', 'http://data.assemblee-nationale.fr/static/openData/repository/17/questions/questions_ecrites/Questions_ecrites.json.zip'],
 ];
 
-/** Recursively find the first string value at a dotted path of candidate keys. */
-function deepFind(obj: unknown, keys: string[], depth = 0): string | undefined {
-  if (!obj || typeof obj !== 'object' || depth > 6) return undefined;
-  const rec = obj as Record<string, unknown>;
-  for (const k of Object.keys(rec)) {
-    if (keys.includes(k) && typeof rec[k] === 'string' && rec[k]) return rec[k] as string;
-  }
-  for (const k of Object.keys(rec)) {
-    const found = deepFind(rec[k], keys, depth + 1);
-    if (found) return found;
-  }
+/** Unwrap AN's frequent "either object or array of objects" nesting. */
+function firstObj(v: unknown): Record<string, unknown> | undefined {
+  if (Array.isArray(v)) return (v[0] ?? undefined) as Record<string, unknown> | undefined;
+  if (v && typeof v === 'object') return v as Record<string, unknown>;
   return undefined;
 }
 
-/**
- * Fetch Assemblée nationale questions from open-data zip archives.
- * First-run debug: dumps archive structure + a sample record to reveal the
- * JSON schema, then returns []. Parsing is wired in once schema is confirmed.
- */
+function asStr(v: unknown): string | undefined {
+  if (typeof v === 'string' && v.trim()) return v.trim();
+  if (Array.isArray(v) && typeof v[0] === 'string') return (v[0] as string).trim() || undefined;
+  return undefined;
+}
+
+function stripHtml(html: string | undefined): string | undefined {
+  if (!html) return undefined;
+  return html
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&[a-z]+;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Extract a normalized ParliamentItem from one AN "question" object. */
+function parseAnQuestion(q: Record<string, unknown>): ParliamentItem | undefined {
+  const uid = asStr(q.uid);
+  const type = (asStr(q.type) ?? '').toUpperCase();
+  const sousType = type === 'QG' ? 'QG' : type === 'QOSD' ? 'QOSD' : 'QE';
+
+  const indexation = firstObj(q.indexationAN);
+  const rubrique = asStr(indexation?.rubrique);
+  let titre = asStr(firstObj(indexation?.analyses)?.analyse) ?? asStr(indexation?.teteAnalyse);
+
+  const tq = firstObj(firstObj(q.textesQuestion)?.texteQuestion);
+  const tr = firstObj(firstObj(q.textesReponse)?.texteReponse);
+  if (!titre) titre = stripHtml(asStr(tq?.texte))?.slice(0, 180);
+  if (!titre) return undefined;
+
+  const minAttrib = firstObj(firstObj(q.minAttribs)?.minAttrib);
+  const dateDepot =
+    asStr(firstObj(tq?.infoJO)?.dateJO) ?? asStr(firstObj(minAttrib?.infoJO)?.dateJO);
+  const dateReponse = asStr(firstObj(tr?.infoJO)?.dateJO);
+
+  const groupe = asStr(firstObj(firstObj(q.auteur)?.groupe)?.abrege);
+  const ministere = asStr(firstObj(q.minInt)?.developpe);
+
+  return {
+    source: 'an',
+    sous_type: sousType,
+    titre,
+    auteur: undefined,
+    groupe,
+    ministere,
+    rubrique,
+    date: dateDepot,
+    date_reponse: dateReponse,
+    a_reponse: !!dateReponse,
+    url: uid
+      ? `https://www.assemblee-nationale.fr/dyn/17/questions/${uid}`
+      : 'https://www2.assemblee-nationale.fr/recherche/resultats_questions',
+  };
+}
+
+/** Fetch Assemblée nationale questions (QG/QOSD/QE) from open-data zip archives. */
 export async function fetchAnQuestions(sinceIso: string): Promise<ParliamentItem[]> {
   const items: ParliamentItem[] = [];
+  const dec = new TextDecoder('utf-8');
 
   for (const [kind, url] of AN_QUESTION_ZIPS) {
-    const resp = await fetch(url, { headers: { 'User-Agent': 'moltbot-veille' } });
-    if (!resp.ok) throw new Error(`AN ${kind} zip HTTP ${resp.status}`);
-    const buf = new Uint8Array(await resp.arrayBuffer());
-    const files = unzipSync(buf);
-    const names = Object.keys(files);
-    const jsonNames = names.filter((n) => n.toLowerCase().endsWith('.json'));
-    console.log(`[veille][debug] AN ${kind}: ${names.length} entries, ${jsonNames.length} json; first=${JSON.stringify(jsonNames.slice(0, 3))}`);
+    try {
+      const resp = await fetch(url, { headers: { 'User-Agent': 'moltbot-veille' } });
+      if (!resp.ok) {
+        console.warn(`[veille] AN ${kind} zip HTTP ${resp.status} — skipping`);
+        continue;
+      }
+      const buf = new Uint8Array(await resp.arrayBuffer());
+      const files = unzipSync(buf);
+      const jsonNames = Object.keys(files).filter((n) => n.toLowerCase().endsWith('.json'));
 
-    if (jsonNames.length === 0) continue;
-
-    // Single-file archive vs one-file-per-question: inspect the first json
-    const dec = new TextDecoder('utf-8');
-    const first = JSON.parse(dec.decode(files[jsonNames[0]]));
-    console.log(`[veille][debug] AN ${kind} sample keys: ${JSON.stringify(Object.keys(first))}`);
-    console.log(`[veille][debug] AN ${kind} sample: ${JSON.stringify(first).slice(0, 1200)}`);
-
-    void sinceIso;
-    void deepFind;
+      let kept = 0;
+      let maxDate = '';
+      for (const name of jsonNames) {
+        let q: Record<string, unknown> | undefined;
+        try {
+          const parsed = JSON.parse(dec.decode(files[name])) as Record<string, unknown>;
+          q = firstObj(parsed.question) ?? parsed;
+        } catch {
+          continue;
+        }
+        const item = parseAnQuestion(q);
+        if (!item) continue;
+        const d = item.date && item.date > '' ? item.date : '';
+        if (d > maxDate) maxDate = d;
+        const depOk = item.date && item.date >= sinceIso;
+        const repOk = item.date_reponse && item.date_reponse >= sinceIso;
+        if (!depOk && !repOk) continue;
+        items.push(item);
+        kept++;
+      }
+      console.log(`[veille] an-${kind}: ${kept}/${jsonNames.length} in window (latest ${maxDate || 'n/a'})`);
+    } catch (err) {
+      console.warn(`[veille] AN ${kind} failed (non-fatal):`, err instanceof Error ? err.message : String(err));
+    }
   }
 
   return items;
