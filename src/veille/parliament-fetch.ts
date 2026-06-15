@@ -7,6 +7,8 @@
  * others, and never blocks the email veille.
  */
 
+import { unzipSync } from 'fflate';
+
 export interface ParliamentItem {
   source: 'senat' | 'an';
   sous_type: string; // QE / QG / QOSD / QC
@@ -188,7 +190,57 @@ export async function fetchSenatQuestions(sinceIso: string): Promise<ParliamentI
       url: get(cUrl) || 'https://www.senat.fr/questions/',
     });
   }
-  console.log(`[veille][debug] senat maxDate=${maxDate} maxRep=${maxRep} since=${sinceIso} matched=${items.length}`);
+  console.log(`[veille] senat-questions: ${items.length} in window (latest dépôt ${maxDate || 'n/a'}, latest réponse ${maxRep || 'n/a'})`);
+  return items;
+}
+
+const AN_QUESTION_ZIPS: Array<[string, string]> = [
+  ['QG', 'http://data.assemblee-nationale.fr/static/openData/repository/17/questions/questions_gouvernement/Questions_gouvernement.json.zip'],
+];
+
+/** Recursively find the first string value at a dotted path of candidate keys. */
+function deepFind(obj: unknown, keys: string[], depth = 0): string | undefined {
+  if (!obj || typeof obj !== 'object' || depth > 6) return undefined;
+  const rec = obj as Record<string, unknown>;
+  for (const k of Object.keys(rec)) {
+    if (keys.includes(k) && typeof rec[k] === 'string' && rec[k]) return rec[k] as string;
+  }
+  for (const k of Object.keys(rec)) {
+    const found = deepFind(rec[k], keys, depth + 1);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/**
+ * Fetch Assemblée nationale questions from open-data zip archives.
+ * First-run debug: dumps archive structure + a sample record to reveal the
+ * JSON schema, then returns []. Parsing is wired in once schema is confirmed.
+ */
+export async function fetchAnQuestions(sinceIso: string): Promise<ParliamentItem[]> {
+  const items: ParliamentItem[] = [];
+
+  for (const [kind, url] of AN_QUESTION_ZIPS) {
+    const resp = await fetch(url, { headers: { 'User-Agent': 'moltbot-veille' } });
+    if (!resp.ok) throw new Error(`AN ${kind} zip HTTP ${resp.status}`);
+    const buf = new Uint8Array(await resp.arrayBuffer());
+    const files = unzipSync(buf);
+    const names = Object.keys(files);
+    const jsonNames = names.filter((n) => n.toLowerCase().endsWith('.json'));
+    console.log(`[veille][debug] AN ${kind}: ${names.length} entries, ${jsonNames.length} json; first=${JSON.stringify(jsonNames.slice(0, 3))}`);
+
+    if (jsonNames.length === 0) continue;
+
+    // Single-file archive vs one-file-per-question: inspect the first json
+    const dec = new TextDecoder('utf-8');
+    const first = JSON.parse(dec.decode(files[jsonNames[0]]));
+    console.log(`[veille][debug] AN ${kind} sample keys: ${JSON.stringify(Object.keys(first))}`);
+    console.log(`[veille][debug] AN ${kind} sample: ${JSON.stringify(first).slice(0, 1200)}`);
+
+    void sinceIso;
+    void deepFind;
+  }
+
   return items;
 }
 
@@ -201,6 +253,7 @@ export async function fetchParliamentItems(sinceIso: string): Promise<Parliament
 
   const sources: Array<[string, () => Promise<ParliamentItem[]>]> = [
     ['senat-questions', () => fetchSenatQuestions(sinceIso)],
+    ['an-questions', () => fetchAnQuestions(sinceIso)],
   ];
 
   for (const [name, fn] of sources) {
