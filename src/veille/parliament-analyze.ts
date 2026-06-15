@@ -12,7 +12,7 @@ function prefilterForClient(items: ParliamentItem[], client: ClientConfig): Parl
   ];
 
   return items.filter((it) => {
-    const hay = [it.titre, it.rubrique, it.auteur, it.ministere].join(' ').toLowerCase();
+    const hay = [it.titre, it.rubrique, it.auteur, it.ministere, it.texte].join(' ').toLowerCase();
     return needles.some((n) => hay.includes(n));
   });
 }
@@ -47,11 +47,25 @@ export async function analyzeParliamentForClient(
     };
   }
 
+  const TYPE_LABEL: Record<string, string> = {
+    QE: 'question écrite',
+    QG: 'question au gouvernement',
+    QOSD: 'question orale',
+    QC: 'question de crise',
+    amendement: 'amendement',
+    dossier: 'dossier législatif',
+    ppl: 'proposition de loi',
+    scrutin: 'scrutin',
+    nomination: 'nomination JORF',
+  };
+
   const brief = candidates
     .map((it, i) => {
-      const evt = it.a_reponse ? '📨 réponse publiée' : '📝 nouvelle question';
-      return `[${i + 1}] (${it.source.toUpperCase()} ${it.sous_type}, ${evt}) ${it.titre}
-   Auteur: ${it.auteur ?? '?'}${it.groupe ? ` (${it.groupe})` : ''} | Ministère: ${it.ministere ?? '?'} | Rubrique: ${it.rubrique ?? '?'}
+      const kind = TYPE_LABEL[it.sous_type] ?? it.sous_type;
+      const evt = it.a_reponse ? '📨 réponse publiée' : '📝 dépôt/publication';
+      const snippet = it.texte ? `\n   Extrait: ${it.texte.slice(0, 200)}` : '';
+      return `[${i + 1}] (${it.source.toUpperCase()} · ${kind}, ${evt}) ${it.titre}
+   Auteur: ${it.auteur ?? '?'}${it.groupe ? ` (${it.groupe})` : ''} | Ministère: ${it.ministere ?? '?'} | Rubrique: ${it.rubrique ?? '?'}${snippet}
    ${it.url}`;
     })
     .join('\n');
@@ -60,16 +74,16 @@ export async function analyzeParliamentForClient(
 Secteurs : ${client.secteurs.join(', ')}
 Enjeux : ${client.sujet_instit}
 
-Tu reçois des questions parlementaires (AN/Sénat) déposées ou répondues dans les dernières 24-72h, déjà préfiltrées par mots-clés. Sélectionne UNIQUEMENT celles réellement pertinentes pour ${client.nom_court} (écarte les faux positifs). Pour chaque question retenue, écris une ligne Slack mrkdwn concise.`;
+Tu reçois de l'activité parlementaire (questions AN/Sénat, amendements, dossiers législatifs, propositions de loi, scrutins, nominations JORF) déposée/publiée dans les dernières 24-72h, déjà préfiltrée par mots-clés. Sélectionne UNIQUEMENT ce qui est réellement pertinent et stratégique pour ${client.nom_court} (écarte les faux positifs). Pour chaque élément retenu, écris une ligne Slack mrkdwn concise.`;
 
-  const userPrompt = `Questions candidates pour ${client.nom_court} :
+  const userPrompt = `Éléments candidats pour ${client.nom_court} :
 
 ${brief}
 
 Réponds en JSON strict :
 {
   "retenues": [
-    { "indice": 1, "ligne": "• <url|Titre court> — _auteur, ministère_ · angle d'intérêt pour ${client.nom_court} en quelques mots" }
+    { "indice": 1, "ligne": "• <url|Titre court> — _type, auteur/ministère_ · angle d'intérêt pour ${client.nom_court} en quelques mots" }
   ]
 }
 Garde au maximum 8 lignes, les plus stratégiques. Si aucune n'est pertinente, retenues = [].`;
@@ -124,7 +138,7 @@ Garde au maximum 8 lignes, les plus stratégiques. Si aucune n'est pertinente, r
     '',
     ...lines,
     '',
-    `_${candidates.length} question(s) parlementaire(s) examinée(s) · source : open data AN/Sénat_`,
+    `_${candidates.length} élément(s) parlementaire(s) examiné(s) · source : open data AN/Sénat + JORF_`,
   ].join('\n');
 
   return {

@@ -56,6 +56,23 @@ async function main() {
   });
   console.log(`[veille] ${parliamentItems.length} parliamentary item(s) in window`);
 
+  // Fetch-only validation mode: exercise the open-data ingestion in the cloud
+  // (confirm URLs/schemas from the Action logs) without touching IMAP or Slack.
+  if (process.env.VEILLE_FETCH_ONLY?.trim()) {
+    const byType = new Map<string, number>();
+    for (const it of parliamentItems) {
+      const key = `${it.source}/${it.sous_type}`;
+      byType.set(key, (byType.get(key) ?? 0) + 1);
+    }
+    console.log('[veille] FETCH_ONLY breakdown:');
+    for (const [k, n] of [...byType.entries()].sort()) console.log(`[veille]   ${k}: ${n}`);
+    for (const it of parliamentItems.slice(0, 12)) {
+      console.log(`[veille]   • [${it.source}/${it.sous_type}] ${it.titre.slice(0, 120)} (${it.date ?? '?'})`);
+    }
+    console.log('[veille] FETCH_ONLY done — skipping IMAP + Slack.');
+    process.exit(0);
+  }
+
   console.log('[veille] Fetching emails via IMAP...');
   let emails: Awaited<ReturnType<typeof fetchImapEmails>>;
 

@@ -11,13 +11,14 @@ import { unzipSync } from 'fflate';
 
 export interface ParliamentItem {
   source: 'senat' | 'an' | 'jorf';
-  sous_type: string; // QE / QG / QOSD / QC / nomination
+  // QE / QG / QOSD / QC / nomination / amendement / dossier / scrutin / ppl
+  sous_type: string;
   titre: string;
   auteur?: string;
   groupe?: string;
   ministere?: string;
   rubrique?: string;
-  date?: string; // ISO date of deposit
+  date?: string; // ISO date of deposit / latest activity
   date_reponse?: string; // ISO date of ministerial answer
   a_reponse: boolean;
   url: string;
@@ -307,6 +308,320 @@ export async function fetchAnQuestions(sinceIso: string): Promise<ParliamentItem
   return items;
 }
 
+/**
+ * Downloads the first reachable AN open-data zip from a candidate list and
+ * returns the decompressed file map. Logs which URL won so the runtime loop can
+ * pin the correct path from the Action logs.
+ */
+async function fetchAnZip(
+  label: string,
+  candidateUrls: string[],
+): Promise<Record<string, Uint8Array> | null> {
+  for (const url of candidateUrls) {
+    try {
+      const resp = await fetch(url, { headers: { 'User-Agent': 'moltbot-veille' } });
+      if (!resp.ok) {
+        console.warn(`[veille] AN ${label} zip HTTP ${resp.status} @ ${url}`);
+        continue;
+      }
+      const buf = new Uint8Array(await resp.arrayBuffer());
+      const files = unzipSync(buf);
+      const names = Object.keys(files);
+      console.log(`[veille] AN ${label}: zip OK @ ${url} (${names.length} file(s))`);
+      console.log(`[veille] AN ${label}: sample files: ${names.slice(0, 3).join(', ')}`);
+      return files;
+    } catch (err) {
+      console.warn(`[veille] AN ${label} zip failed @ ${url}:`, err instanceof Error ? err.message : String(err));
+    }
+  }
+  console.warn(`[veille] AN ${label}: no candidate URL worked — skipping`);
+  return null;
+}
+
+/** Recursively pull the first non-empty string found under any of `keys`. */
+function deepStr(obj: unknown, keys: string[], depth = 0): string | undefined {
+  if (depth > 6 || obj == null) return undefined;
+  if (Array.isArray(obj)) {
+    for (const v of obj) {
+      const r = deepStr(v, keys, depth + 1);
+      if (r) return r;
+    }
+    return undefined;
+  }
+  if (typeof obj === 'object') {
+    const rec = obj as Record<string, unknown>;
+    for (const k of keys) {
+      const v = rec[k];
+      if (typeof v === 'string' && v.trim()) return v.trim();
+    }
+    for (const v of Object.values(rec)) {
+      const r = deepStr(v, keys, depth + 1);
+      if (r) return r;
+    }
+  }
+  return undefined;
+}
+
+let _anSampleDumped: Record<string, boolean> = {};
+/** One-shot: log the top-level shape of the first entry to confirm schema in logs. */
+function dumpAnSample(label: string, root: unknown): void {
+  if (_anSampleDumped[label]) return;
+  _anSampleDumped[label] = true;
+  try {
+    const top = root && typeof root === 'object' ? Object.keys(root as object) : typeof root;
+    console.log(`[veille] AN ${label} sample top-level keys: ${JSON.stringify(top)}`);
+    const inner = firstObj((root as Record<string, unknown>)?.[Object.keys(root as object)[0]]);
+    if (inner) console.log(`[veille] AN ${label} sample inner keys: ${JSON.stringify(Object.keys(inner)).slice(0, 400)}`);
+  } catch {
+    /* best effort */
+  }
+}
+
+/**
+ * Fetch AN amendements (legislature 17). One JSON file per amendment in the zip
+ * (very large archive, ~100k entries). Keeps only those deposited on/after
+ * sinceIso. Title is synthesized from the targeted text + sort + dispositif snippet.
+ */
+export async function fetchAnAmendements(sinceIso: string): Promise<ParliamentItem[]> {
+  const files = await fetchAnZip('amendements', [
+    'http://data.assemblee-nationale.fr/static/openData/repository/17/loi/amendements_legis/Amendements.json.zip',
+    'http://data.assemblee-nationale.fr/static/openData/repository/17/amendements/Amendements.json.zip',
+    'http://data.assemblee-nationale.fr/static/openData/repository/17/loi/amendements/Amendements.json.zip',
+  ]);
+  if (!files) return [];
+
+  const dec = new TextDecoder('utf-8');
+  const items: ParliamentItem[] = [];
+  let kept = 0;
+  let maxDate = '';
+  for (const name of Object.keys(files)) {
+    if (!name.toLowerCase().endsWith('.json')) continue;
+    let root: Record<string, unknown>;
+    try {
+      root = JSON.parse(dec.decode(files[name])) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    dumpAnSample('amendements', root);
+    const a = firstObj(root.amendement) ?? root;
+
+    const cycle = firstObj(a.cycleDeVie);
+    const dateDepot =
+      asStr(cycle?.dateDepot) ?? asStr(cycle?.datePublication) ?? deepStr(cycle, ['dateDepot', 'dateSort']);
+    if (dateDepot && dateDepot > maxDate) maxDate = dateDepot;
+    if (!dateDepot || dateDepot < sinceIso) continue;
+
+    const numero = asStr(a.numero) ?? asStr(a.numeroLong);
+    const texteRef = asStr(a.texteLegislatifRef) ?? asStr(a.texteLegislatif);
+    const auteur =
+      deepStr(a.signataires, ['libelle', 'auteurLibelle']) ?? deepStr(a.signataires, ['texte']);
+    const sort = deepStr(cycle?.sort, ['libelle']) ?? deepStr(cycle, ['etatLibelle']);
+    const expose = stripHtml(deepStr(a.corps, ['exposeSommaire', 'expose']));
+    const dispositif = stripHtml(deepStr(a.corps, ['dispositif', 'contenuAuteur']));
+    const snippet = (expose ?? dispositif ?? '').slice(0, 160);
+
+    const titreParts = [
+      texteRef ? `Texte ${texteRef}` : null,
+      numero ? `amdt n°${numero}` : null,
+      sort ? `(${sort})` : null,
+    ].filter(Boolean);
+    const titre = [titreParts.join(' '), snippet].filter(Boolean).join(' — ') || `Amendement ${name}`;
+
+    items.push({
+      source: 'an',
+      sous_type: 'amendement',
+      titre,
+      auteur,
+      ministere: undefined,
+      rubrique: undefined,
+      date: dateDepot,
+      a_reponse: false,
+      url:
+        texteRef && numero
+          ? `https://www.assemblee-nationale.fr/dyn/17/amendements/${texteRef}/AN/${numero}`
+          : 'https://www.assemblee-nationale.fr/dyn/recherche/amendements',
+      texte: expose ?? dispositif,
+    });
+    kept++;
+  }
+  console.log(`[veille] an-amendements: ${kept} in window (latest dépôt ${maxDate || 'n/a'})`);
+  return items;
+}
+
+/**
+ * Fetch AN legislative dossiers. The archive typically holds one large JSON with
+ * all dossiers; we filter on the latest-activity date being on/after sinceIso.
+ */
+export async function fetchAnDossiers(sinceIso: string): Promise<ParliamentItem[]> {
+  const files = await fetchAnZip('dossiers', [
+    'http://data.assemblee-nationale.fr/static/openData/repository/17/loi/dossiers_legislatifs/Dossiers_Legislatifs.json.zip',
+    'http://data.assemblee-nationale.fr/static/openData/repository/17/loi/dossiers_legislatifs/Dossiers_legislatifs.json.zip',
+  ]);
+  if (!files) return [];
+
+  const dec = new TextDecoder('utf-8');
+  // Collect dossier objects whether the archive is one-file-per-dossier or a
+  // single bundle under export.dossiersLegislatifs.dossier[].
+  const dossiers: Record<string, unknown>[] = [];
+  for (const name of Object.keys(files)) {
+    if (!name.toLowerCase().endsWith('.json')) continue;
+    let root: Record<string, unknown>;
+    try {
+      root = JSON.parse(dec.decode(files[name])) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    dumpAnSample('dossiers', root);
+    const single = firstObj(root.dossierParlementaire) ?? firstObj(root.dossier);
+    if (single) {
+      dossiers.push(single);
+      continue;
+    }
+    const bundle = firstObj(firstObj(root.export)?.dossiersLegislatifs)?.dossier;
+    if (Array.isArray(bundle)) {
+      for (const d of bundle) if (d && typeof d === 'object') dossiers.push(d as Record<string, unknown>);
+    }
+  }
+
+  const items: ParliamentItem[] = [];
+  let kept = 0;
+  let maxDate = '';
+  for (const d of dossiers) {
+    const titreChemin = asStr(d.titreChemin) ?? deepStr(d, ['titreChemin']);
+    const titre = deepStr(firstObj(d.titreDossier), ['titre']) ?? deepStr(d, ['titre']);
+    if (!titre) continue;
+    const dActivite =
+      deepStr(d, ['dateDerniereActivite', 'dateActualisation', 'dateDepot', 'datePublication'])?.slice(0, 10);
+    if (dActivite && dActivite > maxDate) maxDate = dActivite;
+    if (!dActivite || dActivite < sinceIso) continue;
+
+    items.push({
+      source: 'an',
+      sous_type: 'dossier',
+      titre,
+      rubrique: deepStr(d, ['procedureLibelle', 'libelleProcedure']),
+      date: dActivite,
+      a_reponse: false,
+      url: titreChemin
+        ? `https://www.assemblee-nationale.fr/dyn/17/dossiers/${titreChemin}`
+        : 'https://www.assemblee-nationale.fr/dyn/17/dossiers',
+    });
+    kept++;
+  }
+  console.log(`[veille] an-dossiers: ${kept}/${dossiers.length} in window (latest ${maxDate || 'n/a'})`);
+  return items;
+}
+
+/** Fetch AN public scrutins (votes). One JSON per scrutin in the archive. */
+export async function fetchAnScrutins(sinceIso: string): Promise<ParliamentItem[]> {
+  const files = await fetchAnZip('scrutins', [
+    'http://data.assemblee-nationale.fr/static/openData/repository/17/loi/scrutins/Scrutins.json.zip',
+    'http://data.assemblee-nationale.fr/static/openData/repository/17/scrutins/Scrutins.json.zip',
+  ]);
+  if (!files) return [];
+
+  const dec = new TextDecoder('utf-8');
+  const items: ParliamentItem[] = [];
+  let kept = 0;
+  let maxDate = '';
+  for (const name of Object.keys(files)) {
+    if (!name.toLowerCase().endsWith('.json')) continue;
+    let root: Record<string, unknown>;
+    try {
+      root = JSON.parse(dec.decode(files[name])) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    dumpAnSample('scrutins', root);
+    const s = firstObj(root.scrutin) ?? root;
+
+    const numero = asStr(s.numero);
+    const date = deepStr(s, ['dateScrutin', 'date'])?.slice(0, 10);
+    if (date && date > maxDate) maxDate = date;
+    if (!date || date < sinceIso) continue;
+
+    const titre = deepStr(s, ['titre', 'objet', 'libelle']);
+    if (!titre) continue;
+    const sort = deepStr(firstObj(s.sort), ['code', 'libelle']);
+
+    items.push({
+      source: 'an',
+      sous_type: 'scrutin',
+      titre: sort ? `${titre} — ${sort}` : titre,
+      date,
+      a_reponse: false,
+      url: numero
+        ? `https://www.assemblee-nationale.fr/dyn/17/scrutins/${numero}`
+        : 'https://www.assemblee-nationale.fr/dyn/scrutins',
+    });
+    kept++;
+  }
+  console.log(`[veille] an-scrutins: ${kept} in window (latest ${maxDate || 'n/a'})`);
+  return items;
+}
+
+/**
+ * Fetch Sénat legislative dossiers + PPL. Sénat exposes these as CSV under its
+ * open-data tree (like the questions feed). Candidate URLs are tried in order;
+ * the working one is logged so it can be pinned from the Action logs.
+ */
+export async function fetchSenatDosleg(sinceIso: string): Promise<ParliamentItem[]> {
+  const candidates = [
+    'https://data.senat.fr/data/dosleg/dosleg.csv',
+    'https://data.senat.fr/data/dosleg/dossiers-legislatifs.csv',
+    'https://data.senat.fr/data/dosleg/ppl.csv',
+  ];
+
+  const items: ParliamentItem[] = [];
+  for (const url of candidates) {
+    try {
+      const resp = await fetch(url, { headers: { 'User-Agent': 'moltbot-veille' } });
+      if (!resp.ok) {
+        console.warn(`[veille] Sénat dosleg HTTP ${resp.status} @ ${url}`);
+        continue;
+      }
+      const buf = await resp.arrayBuffer();
+      const text = new TextDecoder('latin1').decode(buf);
+      const rows = parseCsv(text, ';');
+      if (rows.length < 2) {
+        console.warn(`[veille] Sénat dosleg @ ${url}: ${rows.length} row(s) — skipping`);
+        continue;
+      }
+      const headers = rows[0];
+      console.log(`[veille] Sénat dosleg @ ${url}: ${rows.length} rows, headers: ${headers.join(' | ').slice(0, 300)}`);
+      const cTitre = findCol(headers, ['titre'], ['intitule'], ['objet']);
+      const cDate = findCol(headers, ['date', 'derniere'], ['datedepot'], ['date']);
+      const cUrl = findCol(headers, ['url'], ['lien']);
+      const isPpl = /ppl/i.test(url);
+
+      let kept = 0;
+      let maxDate = '';
+      for (let r = 1; r < rows.length; r++) {
+        const row = rows[r];
+        const get = (idx: number) => (idx >= 0 && idx < row.length ? row[idx].trim() : '');
+        const date = toIsoDate(get(cDate));
+        if (date && date > maxDate) maxDate = date;
+        if (!date || date < sinceIso) continue;
+        const titre = get(cTitre);
+        if (!titre) continue;
+        items.push({
+          source: 'senat',
+          sous_type: isPpl ? 'ppl' : 'dossier',
+          titre,
+          date,
+          a_reponse: false,
+          url: get(cUrl) || 'https://www.senat.fr/dossiers-legislatifs/',
+        });
+        kept++;
+      }
+      console.log(`[veille] senat-dosleg @ ${url}: ${kept} in window (latest ${maxDate || 'n/a'})`);
+    } catch (err) {
+      console.warn(`[veille] Sénat dosleg @ ${url} failed:`, err instanceof Error ? err.message : String(err));
+    }
+  }
+  return items;
+}
+
 // PISTE / Légifrance credentials (cabinet Voxa own API account).
 const PISTE_CLIENT_ID = process.env.PISTE_CLIENT_ID ?? '182f04c3-cf27-43ec-8d71-af20929fb0d0';
 const PISTE_CLIENT_SECRET = process.env.PISTE_CLIENT_SECRET ?? '9ba8ba82-ab61-43b6-9da4-91071f871d5f';
@@ -410,7 +725,11 @@ export async function fetchParliamentItems(sinceIso: string): Promise<Parliament
 
   const sources: Array<[string, () => Promise<ParliamentItem[]>]> = [
     ['senat-questions', () => fetchSenatQuestions(sinceIso)],
+    ['senat-dosleg', () => fetchSenatDosleg(sinceIso)],
     ['an-questions', () => fetchAnQuestions(anSince)],
+    ['an-amendements', () => fetchAnAmendements(anSince)],
+    ['an-dossiers', () => fetchAnDossiers(anSince)],
+    ['an-scrutins', () => fetchAnScrutins(anSince)],
     ['jorf', () => fetchJorf(sinceIso)],
   ];
 
